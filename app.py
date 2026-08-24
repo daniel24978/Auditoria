@@ -14,7 +14,7 @@ if uploaded_file is not None:
     try:
         raw_bytes = uploaded_file.read()
         
-        # Tratamento de múltiplos formatos de texto do MT5
+        # Leitura de encoding do MT5
         try:
             content = raw_bytes.decode('utf-16')
         except Exception:
@@ -23,8 +23,8 @@ if uploaded_file is not None:
             except Exception:
                 content = raw_bytes.decode('latin-1', errors='ignore')
 
-        # Lê todas as tabelas contidas no arquivo HTML
-        tables = pd.read_html(io.StringIO(content))
+        # Lê as tabelas usando o motor nativo 'html.parser' para evitar erro de lxml
+        tables = pd.read_html(io.StringIO(content), flavor='html5lib')
         
         df_trades = None
         
@@ -66,7 +66,7 @@ if uploaded_file is not None:
         else:
             pf, total_trades, win_rate, sqn = 0.0, 0, 0.0, 0.0
 
-        # Extração do Drawdown
+        # Extração do Drawdown via Regex
         dd_match = re.search(r'\(([\d\.\,]+)\%\)', content)
         dd = float(dd_match.group(1).replace(',', '.')) if dd_match else 0.0
 
