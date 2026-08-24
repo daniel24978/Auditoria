@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import io
 import re
 
 st.set_page_config(page_title="Validador & Auditor MT5", layout="wide")
@@ -14,7 +13,7 @@ if uploaded_file is not None:
     try:
         raw_bytes = uploaded_file.read()
         
-        # Leitura de encoding do MT5
+        # Leitura de encoding do MT5 (UTF-16, UTF-8 ou Latin-1)
         try:
             content = raw_bytes.decode('utf-16')
         except Exception:
@@ -23,60 +22,70 @@ if uploaded_file is not None:
             except Exception:
                 content = raw_bytes.decode('latin-1', errors='ignore')
 
-        # Lê as tabelas usando o motor nativo 'html.parser' para evitar erro de lxml
-        tables = pd.read_html(io.StringIO(content), flavor='html5lib')
+        # --- PARSER NATIVO VIA REGEX (DISPENSA LXML E HTML5LIB) ---
         
-        df_trades = None
-        
-        # Mapeamento do histórico de compra e venda
-        for df in tables:
-            df_str = df.to_string().lower()
-            if 'buy' in df_str or 'sell' in df_str or 'compra' in df_str or 'venda' in df_str:
-                df_trades = df
-                break
-
-        if df_trades is not None:
-            st.success("✅ Histórico de entradas e saídas mapeado com sucesso!")
-            
-            profit_col = None
-            for col in df_trades.columns:
-                col_name = str(col).lower()
-                if 'profit' in col_name or 'lucro' in col_name or 'resultado' in col_name:
-                    profit_col = col
-                    break
-            
-            if profit_col is not None:
-                profits = pd.to_numeric(
-                    df_trades[profit_col].astype(str).str.replace(' ', '').str.replace(',', '.'), 
-                    errors='coerce'
-                ).dropna()
-
-                lucros = profits[profits > 0]
-                perdas = profits[profits < 0]
-                
-                total_trades = len(profits)
-                lucro_total = lucros.sum()
-                perda_total = abs(perdas.sum())
-                
-                pf = round(lucro_total / perda_total, 2) if perda_total > 0 else (round(lucro_total, 2) if lucro_total > 0 else 0.0)
-                win_rate = round((len(lucros) / total_trades) * 100, 2) if total_trades > 0 else 0.0
-                sqn = round((pf * (total_trades ** 0.5)) / 10, 2) if total_trades > 0 else 0.0
-            else:
-                pf, total_trades, win_rate, sqn = 0.0, 0, 0.0, 0.0
-        else:
-            pf, total_trades, win_rate, sqn = 0.0, 0, 0.0, 0.0
-
-        # Extração do Drawdown via Regex
+        # Extração de métricas de resumo
+        pf_match = re.search(r'(?:Profit Factor|Fator de lucro)\s*</td>\s*<td[^>]*><b>?\s*([\d\.\,]+)', content, re.IGNORECASE)
+        trades_match = re.search(r'(?:Total Trades|Total de negociações)\s*</td>\s*<td[^>]*><b>?\s*(\d+)', content, re.IGNORECASE)
         dd_match = re.search(r'\(([\d\.\,]+)\%\)', content)
+        
+        pf = float(pf_match.group(1).replace(',', '.')) if pf_match else 0.0
+        total_trades = int(trades_match.group(1)) if trades_match else 0
         dd = float(dd_match.group(1).replace(',', '.')) if dd_match else 0.0
 
+        # Extração das linhas da tabela de Histórico de Operações (Deals/Orders)
+        # Busca por linhas de tabelas com valores numéricos de lucro
+        row_pattern = re.compile(r'<tr[^>]*>\s*<td[^>]*>(.*?)</td>\s*</tr>', re.DOTALL | re.IGNORECASE)
+        cells_pattern = re.compile(r'<td[^>]*>(.*?)</td>', re.DOTALL | re.IGNORECASE)
+        
+        trades_data = []
+        for match in row_pattern.finditer(content):
+            row_html = match.group(0)
+            cells = [re.sub(r'<[^>]+>', '', c).strip() for c in cells_pattern.findall(row_html)]
+            if len(cells) >= 6:
+                # Procura por linhas que contenham indicação de compra/venda
+                row_str = " ".join(cells).lower()
+                if any(k in row_str for k in ['buy', 'sell', 'compra', 'venda', 'in', 'out']):
+                    trades_data.append(cells)
+
+        # Monta DataFrame das Operações se encontradas
+        df_trades = None
+        win_rate = 0.0
+        
+        if trades_data:
+            df_trades = pd.DataFrame(trades_data)
+            
+            # Tenta encontrar a coluna de Lucro/Profit (geralmente a última ou penúltima)
+            for col_idx in reversed(range(df_trades.shape[1])):
+                series_clean = df_trades[col_idx].astype(str).str.replace(' ', '').str.replace(',', '.')
+                numeric_series = pd.to_numeric(series_clean, errors='coerce').dropna()
+                
+                # Se encontrou valores numéricos positivos e negativos
+                if len(numeric_series) > 0 and (numeric_series < 0).any():
+                    lucros = numeric_series[numeric_series > 0]
+                    perdas = numeric_series[numeric_series < 0]
+                    
+                    if total_trades == 0:
+                        total_trades = len(numeric_series)
+                    
+                    win_rate = round((len(lucros) / len(numeric_series)) * 100, 2) if len(numeric_series) > 0 else 0.0
+                    
+                    if pf == 0.0 and abs(perdas.sum()) > 0:
+                        pf = round(lucros.sum() / abs(perdas.sum()), 2)
+                    break
+
+        # Cálculo do SQN (System Quality Number)
+        sqn = round((pf * (total_trades ** 0.5)) / 10, 2) if total_trades > 0 else 0.0
+
+        st.success("✅ Relatório do MT5 lido com sucesso!")
+        
         # Exibição dos Dados
         st.subheader("📊 Painel Analítico das Operações")
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Fator de Lucro (PF)", f"{pf}")
+        c1.metric("Fator de Lucro (PF)", f"{pf:.2f}")
         c2.metric("Total de Operações", f"{total_trades}")
         c3.metric("Taxa de Acerto", f"{win_rate}%")
-        c4.metric("Drawdown Máximo", f"{dd}%")
+        c4.metric("Drawdown Máximo", f"{dd:.2f}%")
 
         st.divider()
 
@@ -110,8 +119,8 @@ if uploaded_file is not None:
                 st.error(f"### CATEGORIA: {categoria}")
             st.markdown(f"**{selo}**\n\nRobô desqualificado pelos parâmetros de segurança.")
 
-        if df_trades is not None:
-            with st.expander("📋 Ver Tabela Completa de Entradas e Saídas"):
+        if df_trades is not None and not df_trades.empty:
+            with st.expander("📋 Ver Tabela de Operações Extraídas"):
                 st.dataframe(df_trades)
 
     except Exception as e:
