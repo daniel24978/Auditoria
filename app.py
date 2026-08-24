@@ -1,6 +1,4 @@
 import streamlit as st
-import pandas as pd
-from bs4 import BeautifulSoup
 import re
 
 st.set_page_config(page_title="Validador MT5", layout="wide")
@@ -21,13 +19,10 @@ if uploaded_file is not None:
             except Exception:
                 content = raw_bytes.decode('latin-1', errors='ignore')
 
-        soup = BeautifulSoup(content, 'html.parser')
-        text = soup.get_text()
-
-        # Busca flexível por métricas (Inglês e Português)
-        pf_match = re.search(r'(?:Profit Factor|Fator de lucro)\s*[\:\=]?\s*([\d\.\,]+)', text, re.IGNORECASE)
-        dd_match = re.search(r'(?:Maximal drawdown|Rebaixamento máximo)\s*[\:\=]?\s*[\d\.\,\s]+\(([\d\.\,]+)\%\)', text, re.IGNORECASE) or re.search(r'\(([\d\.\,]+)\%\)', text)
-        trades_match = re.search(r'(?:Total Trades|Total de negociações)\s*[\:\=]?\s*(\d+)', text, re.IGNORECASE)
+        # Busca flexível por métricas usando apenas Expressões Regulares
+        pf_match = re.search(r'(?:Profit Factor|Fator de lucro)\s*[\:\=]?\s*([\d\.\,]+)', content, re.IGNORECASE)
+        dd_match = re.search(r'(?:Maximal drawdown|Rebaixamento máximo)\s*[\:\=]?\s*[\d\.\,\s]+\(([\d\.\,]+)\%\)', content, re.IGNORECASE) or re.search(r'\(([\d\.\,]+)\%\)', content)
+        trades_match = re.search(r'(?:Total Trades|Total de negociações)\s*[\:\=]?\s*(\d+)', content, re.IGNORECASE)
 
         pf = float(pf_match.group(1).replace(',', '.')) if pf_match else 0.0
         dd = float(dd_match.group(1).replace(',', '.')) if dd_match else 0.0
@@ -47,7 +42,7 @@ if uploaded_file is not None:
 
         st.divider()
 
-        # Lógica de Classificação das 4 Categorias
+        # Classificação nas 4 Categorias Rigorosas
         if pf >= 1.8 and sqn >= 2.5 and dd <= 15:
             categoria = "EXCELENTE"
             aprovado = True
